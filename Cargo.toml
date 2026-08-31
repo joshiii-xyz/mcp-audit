@@ -1,0 +1,16 @@
+[package]
+name = "mcp-audit"
+version = "0.1.0"
+edition = "2024"
+description = "Scan and rate the trustworthiness of MCP (Model Context Protocol) servers configured on your machine"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+
