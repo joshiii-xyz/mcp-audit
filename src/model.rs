@@ -15,6 +15,7 @@ pub struct ServerConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
+    Info,
     Low,
     Medium,
     High,
@@ -30,7 +31,7 @@ pub struct Finding {
     pub evidence: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ToolInfo {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -72,7 +72,14 @@ pub fn discover(extra_paths: &[String]) -> Vec<ServerConfig> {
             Ok(t) => t,
             Err(_) => continue,
         };
-        for s in parse_config(&text, &p) {
+        let mut parsed = parse_config(&text, &p);
+        // Never let secret values leave the machine through reports or JSON.
+        for s in parsed.iter_mut() {
+            for (_, v) in s.env.iter_mut() {
+                *v = "[REDACTED]".to_string();
+            }
+        }
+        for s in parsed {
             // dedupe by (name, command/url)
             let key = format!(
                 "{}|{}|{}",

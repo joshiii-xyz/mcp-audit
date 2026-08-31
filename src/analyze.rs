@@ -32,6 +32,7 @@ fn score_and_grade(findings: &[Finding]) -> (u32, char) {
             Severity::High => 20,
             Severity::Medium => 10,
             Severity::Low => 4,
+            Severity::Info => 0,
         };
     }
     let score = score.clamp(0, 100) as u32;
@@ -115,7 +116,7 @@ pub fn analyze_static(s: &ServerConfig) -> Vec<Finding> {
 
     if s.transport == "stdio" && s.command.is_some() {
         f.push(finding(
-            "STDIO_LOCAL_PROCESS", Severity::Low,
+            "STDIO_LOCAL_PROCESS", Severity::Info,
             "Server runs as a local process with the permissions of your user account".into(),
             None,
         ));

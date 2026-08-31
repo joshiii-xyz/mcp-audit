@@ -7,12 +7,13 @@ fn sev_color(s: crate::model::Severity) -> &'static str {
         High => "\x1b[1;93m",
         Medium => "\x1b[33m",
         Low => "\x1b[90m",
+        Info => "\x1b[2m",
     }
 }
 
 const RESET: &str = "\x1b[0m";
 
-pub fn print_text(results: &[AuditResult]) {
+pub fn print_text(results: &[AuditResult], removed: &[String]) {
     for r in results {
         let s = &r.server;
         let via = match (&s.command, &s.url) {
@@ -36,7 +37,7 @@ pub fn print_text(results: &[AuditResult]) {
         };
         println!(
             "\n{} [{grade_color}{}{RESET} {}/100] {}  ({} {})",
-            sev_color(crate::model::Severity::Low),
+            sev_color(crate::model::Severity::Info),
             r.grade,
             r.score,
             s.name,
@@ -64,7 +65,12 @@ pub fn print_text(results: &[AuditResult]) {
         } else {
             println!("  findings:");
             for f in &r.findings {
-                print!("    {}[{}]{RESET} {}", sev_color(f.severity), format!("{:?}", f.severity).to_uppercase(), f.message);
+                print!(
+                    "    {}[{}]{RESET} {}",
+                    sev_color(f.severity),
+                    format!("{:?}", f.severity).to_uppercase(),
+                    f.message
+                );
                 if let Some(e) = &f.evidence {
                     print!(" — \x1b[2m{e}\x1b[0m");
                 }
@@ -72,11 +78,19 @@ pub fn print_text(results: &[AuditResult]) {
             }
         }
     }
-    // summary
-    let (a, crit) = (
-        results.iter().filter(|r| r.grade == 'A').count(),
-        results.iter().map(|r| r.findings.iter().filter(|f| f.severity == crate::model::Severity::Critical).count()).sum::<usize>(),
-    );
+    if !removed.is_empty() {
+        println!(
+            "\n{}[BASELINE]{} servers no longer present: {}",
+            sev_color(crate::model::Severity::Medium),
+            RESET,
+            removed.join(", ")
+        );
+    }
+    let a = results.iter().filter(|r| r.grade == 'A').count();
+    let crit: usize = results
+        .iter()
+        .map(|r| r.findings.iter().filter(|f| f.severity == crate::model::Severity::Critical).count())
+        .sum();
     println!(
         "\n{} servers audited, {} graded A, {crit} critical finding(s){RESET}\n",
         results.len(),

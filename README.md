@@ -51,6 +51,28 @@ Config locations auto-discovered: `~/.claude.json`, Claude Desktop (macOS/Linux)
     [MEDIUM] Tool 'run_command' can execute commands, write/delete files, or reach the network
 ```
 
+## Baseline workflow (detect silent drift)
+
+MCP supply-chain attacks usually arrive as a *silent change*: a server you trusted
+gains a new tool, or its command is swapped. Snapshot once, then diff:
+
+```bash
+mcp-audit --probe --save-baseline .mcp-audit-baseline.json
+# ...time passes...
+mcp-audit --probe --baseline .mcp-audit-baseline.json --strict
+```
+
+Drift findings:
+- **CRITICAL** — server command/URL changed since baseline (config tampering)
+- **HIGH** — a tool appeared that didn't exist before
+- **LOW** — a tool disappeared
+- **MEDIUM** — a brand-new server appeared; baselined servers that vanish also fail the run
+
+Commit `.mcp-audit-baseline.json` to your repo or dotfiles to share the baseline.
+
+Secret values in MCP configs are redacted at discovery time — reports and JSON
+never contain them.
+
 ## Design
 
 - Single dependency pair (`serde`/`serde_json`), no runtime beyond std
