@@ -34,7 +34,11 @@ mcp-audit --config ./mcp.json --config other.json   # explicit config files
 mcp-audit --timeout 15       # probe timeout in seconds
 ```
 
-Config locations auto-discovered: `~/.claude.json`, Claude Desktop (macOS/Linux), `~/.cursor/mcp.json`, Windsurf, VS Code, Gemini CLI. Anything parseable with `mcpServers` / `servers` keys works with `--config`.
+Config locations auto-discovered: `~/.claude.json` (including nested `projects.<path>.mcpServers`), Claude Desktop (macOS/Linux), `~/.cursor/mcp.json`, Windsurf, VS Code, Gemini CLI. Any JSON (or `--config` file) containing `mcpServers` (camelCase), `mcp_servers`, or `servers` objects — at any nesting depth — is parsed. Malformed individual entries are skipped with a stderr warning instead of aborting the file; explicit `--config` paths that don't exist are hard errors (exit 2).
+
+Scoped npm packages are understood: `npx -y @scope/pkg` is unpinned (flagged), `npx -y @scope/pkg@1.2.3` is not. Only true pipe-to-shell patterns (`curl ... | bash`) are flagged CRITICAL; a bare `curl` is MEDIUM.
+
+`--probe` refuses to execute a config it has flagged CRITICAL (use `--force-probe` to override) and passes the config's `env` to the server so real servers respond. Timed-out or broken probes never leave orphaned processes, and a server that fails the MCP handshake is reported (HIGH), not silently treated as clean.
 
 ## Example output
 
@@ -70,8 +74,7 @@ Drift findings:
 
 Commit `.mcp-audit-baseline.json` to your repo or dotfiles to share the baseline.
 
-Secret values in MCP configs are redacted at discovery time — reports and JSON
-never contain them.
+Secrets are redacted at the output boundary — `env` values, credential-shaped `args` (`--api-key sk-...`), and URL userinfo (`user:pass@host`) never appear in text or JSON reports. Terminal control characters from untrusted server/tool names are escaped, so a hostile server cannot inject escape sequences into your report.
 
 ## Design
 

@@ -13,7 +13,40 @@ fn sev_color(s: crate::model::Severity) -> &'static str {
 
 const RESET: &str = "\x1b[0m";
 
+/// Copy of results safe to print: secrets in args/urls/env redacted and all
+/// untrusted strings stripped of control characters.
+fn display(results: &[AuditResult]) -> Vec<AuditResult> {
+    use crate::model::{redact_args, redact_env, redact_url, sanitize_display};
+    results.iter().map(|r| {
+        let mut server = r.server.clone();
+        server.name = sanitize_display(&server.name);
+        server.source_file = sanitize_display(&server.source_file);
+        server.args = redact_args(&server.args).iter().map(|a| sanitize_display(a)).collect();
+        server.env = redact_env(&server.env);
+        server.url = server.url.as_ref().map(|u| sanitize_display(&redact_url(u)));
+        if let Some(c) = &server.command {
+            server.command = Some(sanitize_display(c));
+        }
+        let mut out = r.clone();
+        out.server = server;
+        out.tools = r.tools.iter().map(|t| crate::model::ToolInfo {
+            name: sanitize_display(&t.name),
+            description: t.description.as_ref().map(|d| sanitize_display(d)),
+        }).collect();
+        out.findings = r.findings.iter().map(|f| crate::model::Finding {
+            id: f.id.clone(),
+            severity: f.severity,
+            message: sanitize_display(&f.message),
+            evidence: f.evidence.as_ref().map(|e| sanitize_display(e)),
+        }).collect();
+        out.error = r.error.as_ref().map(|e| sanitize_display(e));
+        out
+    }).collect()
+}
+
 pub fn print_text(results: &[AuditResult], removed: &[String]) {
+    let results = &display(results);
+    let removed: Vec<String> = removed.iter().map(|r| crate::model::sanitize_display(r)).collect();
     for r in results {
         let s = &r.server;
         let via = match (&s.command, &s.url) {
@@ -99,5 +132,6 @@ pub fn print_text(results: &[AuditResult], removed: &[String]) {
 }
 
 pub fn print_json(results: &[AuditResult]) {
-    println!("{}", serde_json::to_string_pretty(results).unwrap_or_default());
+    let safe = display(results);
+    println!("{}", serde_json::to_string_pretty(&safe).unwrap_or_default());
 }

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "servers": [
-    { "name": "fs", "command": "/bin/fs", "args": [], "url": null, "tools": ["read", "write"] },
-    { "name": "web", "command": "/bin/web", "args": [], "url": null, "tools": ["fetch"] }
+    { "name": "fs", "command": "/bin/fs", "args": [], "url": null, "probed": true, "tools": ["read", "write"] },
+    { "name": "web", "command": "/bin/web", "args": [], "url": null, "probed": true, "tools": ["fetch"] }
   ]
 }

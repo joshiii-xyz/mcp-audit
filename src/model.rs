@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerConfig {
@@ -38,7 +38,7 @@ pub struct ToolInfo {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AuditResult {
     pub server: ServerConfig,
     pub probed: bool,
@@ -60,26 +60,77 @@ pub fn grade_for(score: u32) -> char {
     }
 }
 
-// ---- raw config parsing ----
+// ---- redaction / sanitizing helpers (used at output boundaries) ----
 
-#[derive(Deserialize)]
-pub struct RawMcpConfig {
-    #[serde(default)]
-    pub mcp_servers: std::collections::HashMap<String, RawServer>,
-    // VS Code style
-    #[serde(default)]
-    pub servers: std::collections::HashMap<String, RawServer>,
+const SECRET_HINTS: &[&str] = &[
+    "secret", "token", "api_key", "apikey", "api-key", "password", "passwd",
+    "private_key", "privatekey", "access_key", "accesskey", "credential", "auth",
+    "authorization", "session", "cookie",
+];
+
+fn is_secretish(value: &str) -> bool {
+    let v = value.trim();
+    if v.len() < 20 || v.contains(char::is_whitespace) || v.starts_with('/') {
+        return false;
+    }
+    let known = ["sk-", "ghp_", "gho_", "github_pat_", "AKIA", "xoxb-", "xoxp-", "Bearer ", "eyJ"];
+    if known.iter().any(|p| v.starts_with(p)) {
+        return true;
+    }
+    v.chars().all(|c| c.is_ascii_alphanumeric() || "-_.=~+".contains(c)) && v.chars().any(|c| c.is_ascii_digit())
 }
 
-#[derive(Deserialize)]
-pub struct RawServer {
-    pub command: Option<String>,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: std::collections::HashMap<String, String>,
-    pub url: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub r#type: Option<String>,
+pub fn redact_args(args: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut prev_is_flag = false;
+    for a in args {
+        let hint = SECRET_HINTS.iter().any(|h| a.to_lowercase().contains(h));
+        if is_secretish(a) {
+            out.push("[REDACTED]".into());
+        } else if prev_is_flag {
+            out.push("[REDACTED]".into());
+        } else {
+            out.push(a.clone());
+        }
+        prev_is_flag = hint;
+    }
+    out
+}
+
+pub fn redact_url(url: &str) -> String {
+    // scheme://user:password@host -> scheme://user:[REDACTED]@host
+    if let Some(scheme_end) = url.find("://") {
+        let (scheme, rest) = url.split_at(scheme_end + 3);
+        if let Some(at) = rest.find('@') {
+            let userinfo = &rest[..at];
+            if let Some(colon) = userinfo.find(':') {
+                let user = &userinfo[..colon];
+                return format!("{scheme}{user}:[REDACTED]@{}", &rest[at + 1..]);
+            }
+        }
+    }
+    url.to_string()
+}
+
+pub fn redact_env(env: &[(String, String)]) -> Vec<(String, String)> {
+    env.iter().map(|(k, _)| (k.clone(), "[REDACTED]".to_string())).collect()
+}
+
+/// Escape control characters (ESC, newlines, etc.) so untrusted strings
+/// cannot inject terminal escape sequences into reports.
+pub fn sanitize_display(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\x1b' => out.push_str("\\e"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }

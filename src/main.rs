@@ -22,6 +22,8 @@ OPTIONS:\n  \
   --baseline <f>        Compare against a baseline; flag silent tool/config drift\n  \
   --timeout <secs>      Probe timeout in seconds (default: 10)\n  \
   --config <path>       Also scan an explicit MCP config file (repeatable)\n  \
+  --force-probe         Allow --probe even on configs flagged CRITICAL (dangerous)
+  --version             Print version
   --help                Show this help\n\n\
 TYPICAL WORKFLOW:\n  \
   mcp-audit --probe --save-baseline .mcp-audit-baseline.json\n  \
@@ -41,6 +43,7 @@ fn main() {
     let mut only: Vec<String> = Vec::new();
     let mut save_baseline: Option<String> = None;
     let mut baseline_path: Option<String> = None;
+    let mut force_probe = false;
 
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -57,14 +60,32 @@ fn main() {
             "--json" => json = true,
             "--strict" => strict = true,
             "--help" | "-h" => usage(0),
-            "--timeout" => timeout = val("--timeout").parse().unwrap_or_else(|_| {
-                eprintln!("error: --timeout needs a number");
-                std::process::exit(2);
-            }),
-            "--fail-under" => fail_under = Some(val("--fail-under").parse().unwrap_or_else(|_| {
-                eprintln!("error: --fail-under needs a number 0-100");
-                std::process::exit(2);
-            })),
+            "--version" => {
+                println!("mcp-audit {}", env!("CARGO_PKG_VERSION"));
+                return;
+            }
+            "--force-probe" => force_probe = true,
+            "--timeout" => {
+                timeout = val("--timeout").parse().unwrap_or_else(|_| {
+                    eprintln!("error: --timeout needs a number");
+                    std::process::exit(2);
+                });
+                if timeout == 0 {
+                    eprintln!("error: --timeout must be at least 1 second");
+                    std::process::exit(2);
+                }
+            }
+            "--fail-under" => {
+                let v: u32 = val("--fail-under").parse().unwrap_or_else(|_| {
+                    eprintln!("error: --fail-under needs a number 0-100");
+                    std::process::exit(2);
+                });
+                if v > 100 {
+                    eprintln!("error: --fail-under must be 0-100");
+                    std::process::exit(2);
+                }
+                fail_under = Some(v);
+            }
             "--only" => only.push(val("--only")),
             "--config" => extra.push(val("--config")),
             "--save-baseline" => save_baseline = Some(val("--save-baseline")),
@@ -76,9 +97,43 @@ fn main() {
         }
     }
 
-    let servers = discover::discover(&extra);
+    let (servers, warnings) = match discover::discover(&extra) {
+        Ok(x) => x,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(2);
+        }
+    };
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
     if servers.is_empty() {
-        println!("No MCP servers found in known config locations.");
+        // Still honor baseline comparison: a config that lost all its servers
+        // is exactly when drift matters most.
+        if let Some(bp) = &baseline_path {
+            match baseline::load(bp) {
+                Ok(b) => {
+                    let (drift, removed) = baseline::diff(&b, &[], &only);
+                    let _ = drift;
+                    if removed.is_empty() {
+                        if json { println!("[]"); } else { println!("No MCP servers found in known config locations."); }
+                        return;
+                    }
+                    if json {
+                        println!("[]");
+                    } else {
+                        println!("No MCP servers found in known config locations.");
+                        println!("\n[BASELINE] servers no longer present: {}", removed.join(", "));
+                    }
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        if json { println!("[]"); } else { println!("No MCP servers found in known config locations."); }
         return;
     }
 
@@ -87,26 +142,32 @@ fn main() {
         .filter(|s| only.is_empty() || only.iter().any(|n| s.name.contains(n.as_str())))
         .map(|s| {
             let static_findings = analyze::analyze_static(s);
+            let critical = static_findings.iter().any(|x| x.severity == model::Severity::Critical);
             if !do_probe || s.transport != "stdio" {
                 return analyze::finalize(s, false, None, Vec::new(), static_findings);
             }
-            match probe::probe(s, Duration::from_secs(timeout)) {
-                Ok(tools) => {
-                    let mut f = static_findings;
-                    f.extend(analyze::analyze_tools(&tools));
-                    analyze::finalize(s, true, None, tools, f)
-                }
-                Err(e) => {
-                    let mut f = static_findings;
-                    f.push(model::Finding {
-                        id: "PROBE_FAILED".into(),
-                        severity: model::Severity::Medium,
-                        message: "Server could not be probed; it may be broken, slow, or refuse to start".into(),
-                        evidence: None,
-                    });
-                    analyze::finalize(s, true, Some(e), Vec::new(), f)
-                }
+            if critical && !force_probe {
+                let mut f = static_findings;
+                f.push(model::Finding {
+                    id: "PROBE_SKIPPED".into(),
+                    severity: model::Severity::Info,
+                    message: "Probe skipped: this config is flagged CRITICAL and --probe would execute it; use --force-probe to override".into(),
+                    evidence: None,
+                });
+                return analyze::finalize(s, false, None, Vec::new(), f);
             }
+            let outcome = probe::probe(s, Duration::from_secs(timeout));
+            let mut f = static_findings;
+            f.extend(analyze::analyze_tools(&outcome.tools));
+            if let Some(e) = &outcome.error {
+                f.push(model::Finding {
+                    id: "PROBE_FAILED".into(),
+                    severity: model::Severity::High,
+                    message: "Server could not be probed or did not complete the MCP handshake; it may be broken or not an MCP server".into(),
+                    evidence: Some(e.clone()),
+                });
+            }
+            analyze::finalize(s, true, outcome.error, outcome.tools, f)
         })
         .collect();
 
@@ -117,7 +178,7 @@ fn main() {
     if let Some(bp) = &baseline_path {
         match baseline::load(bp) {
             Ok(b) => {
-                let (drift, removed) = baseline::diff(&b, &results);
+                let (drift, removed) = baseline::diff(&b, &results, &only);
                 removed_servers = removed;
                 for (server_name, finding) in drift {
                     if let Some(r) = results.iter_mut().find(|r| r.server.name == server_name) {
@@ -155,6 +216,9 @@ fn main() {
     let mut fail = false;
     if strict {
         fail |= results.iter().any(|r| matches!(r.grade, 'D' | 'F'));
+        fail |= results
+            .iter()
+            .any(|r| r.findings.iter().any(|f| f.severity == model::Severity::Critical));
     }
     if let Some(min) = fail_under {
         fail |= results.iter().any(|r| r.score < min);

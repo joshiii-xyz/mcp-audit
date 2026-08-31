@@ -7,6 +7,8 @@ use crate::model::{AuditResult, Finding, ServerConfig, Severity};
 #[derive(Serialize, Deserialize)]
 struct BaselineServer {
     name: String,
+    #[serde(default)]
+    probed: bool,
     command: String,
     args: Vec<String>,
     url: Option<String>,
@@ -26,6 +28,7 @@ pub fn save(path: &str, results: &[AuditResult]) -> Result<(), String> {
             .iter()
             .map(|r| BaselineServer {
                 name: r.server.name.clone(),
+                probed: r.probed,
                 command: r.server.command.clone().unwrap_or_default(),
                 args: r.server.args.clone(),
                 url: r.server.url.clone(),
@@ -52,11 +55,19 @@ fn fingerprint(s: &ServerConfig) -> String {
 }
 
 /// Compare audited results against a baseline, returning drift findings.
-pub fn diff(baseline: &Baseline, results: &[AuditResult]) -> (Vec<(String, Finding)>, Vec<String>) {
+pub fn diff(
+    baseline: &Baseline,
+    results: &[AuditResult],
+    name_filter: &[String],
+) -> (Vec<(String, Finding)>, Vec<String>) {
+    let matches_filter = |name: &str| name_filter.is_empty() || name_filter.iter().any(|n| name.contains(n.as_str()));
     let mut findings = Vec::new();
     let mut removed = Vec::new();
 
     for old in &baseline.servers {
+        if !matches_filter(&old.name) {
+            continue; // scoped out by --only; not a removal
+        }
         match results.iter().find(|r| r.server.name == old.name) {
             None => removed.push(old.name.clone()),
             Some(r) => {
@@ -76,6 +87,17 @@ pub fn diff(baseline: &Baseline, results: &[AuditResult]) -> (Vec<(String, Findi
                         },
                     ));
                 }
+                if !old.probed && r.probed && !r.tools.is_empty() {
+                    findings.push((
+                        r.server.name.clone(),
+                        Finding {
+                            id: "BASELINE_NOT_PROBED".into(),
+                            severity: Severity::Low,
+                            message: "Baseline was saved without --probe, so it recorded no tools; tool drift cannot be checked — re-save the baseline with --probe".into(),
+                            evidence: None,
+                        },
+                    ));
+                } else {
                 let old_tools: std::collections::HashSet<&str> =
                     old.tools.iter().map(|s| s.as_str()).collect();
                 for t in &r.tools {
@@ -106,12 +128,13 @@ pub fn diff(baseline: &Baseline, results: &[AuditResult]) -> (Vec<(String, Findi
                         ));
                     }
                 }
+                }
             }
         }
     }
 
     for r in results {
-        if !baseline.servers.iter().any(|s| s.name == r.server.name) {
+        if !baseline.servers.iter().any(|s| s.name == r.server.name) && matches_filter(&r.server.name) {
             findings.push((
                 r.server.name.clone(),
                 Finding {
@@ -146,7 +169,7 @@ mod tests {
         let base = load("testdata/baseline.json").unwrap();
         let now = vec![server("fs", "/bin/fs", &["read", "write", "exec"])
             ];
-        let (f, _) = diff(&base, &now);
+        let (f, _) = diff(&base, &now, &[]);
         assert!(f.iter().any(|(_, x)| x.id == "TOOL_ADDED" && x.severity == Severity::High));
     }
 
@@ -155,7 +178,7 @@ mod tests {
         let base = load("testdata/baseline.json").unwrap();
         let now = vec![server("fs", "/bin/evil", &["read"])
             ];
-        let (f, _) = diff(&base, &now);
+        let (f, _) = diff(&base, &now, &[]);
         assert!(f.iter().any(|(_, x)| x.id == "CONFIG_DRIFT" && x.severity == Severity::Critical));
     }
 
@@ -163,7 +186,7 @@ mod tests {
     fn clean_match_is_silent() {
         let base = load("testdata/baseline.json").unwrap();
         let now = vec![server("fs", "/bin/fs", &["read", "write"]), server("web", "/bin/web", &["fetch"])];
-        let (f, removed) = diff(&base, &now);
+        let (f, removed) = diff(&base, &now, &[]);
         assert!(f.is_empty(), "unexpected findings: {f:?}");
         assert!(removed.is_empty());
     }
@@ -173,8 +196,54 @@ mod tests {
         let base = load("testdata/baseline.json").unwrap();
         let now = vec![server("fs", "/bin/fs", &["read", "write"]), server("extra", "/bin/x", &[])
             ];
-        let (f, removed) = diff(&base, &now);
+        let (f, removed) = diff(&base, &now, &[]);
         assert!(f.iter().any(|(_, x)| x.id == "SERVER_ADDED"));
         assert_eq!(removed, vec!["web".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod unprobed_tests {
+    use super::*;
+    use crate::model::ToolInfo;
+
+    #[test]
+    fn unprobed_baseline_warns_instead_of_false_added() {
+        let base: Baseline = serde_json::from_str(
+            r#"{
+                "version":1,
+                "servers":[{"name":"fs","command":"/bin/fs","args":[],"url":null,"probed":false,"tools":[]}]
+            }"#,
+        ).unwrap();
+        let s = ServerConfig {
+            name: "fs".into(), source_file: "t".into(), transport: "stdio".into(),
+            command: Some("/bin/fs".into()), args: vec![], env: vec![], url: None,
+        };
+        let tools = vec![ToolInfo { name: "read".into(), description: None }];
+        let r = crate::analyze::finalize(&s, true, None, tools, vec![]);
+        let (f, _) = diff(&base, &[r], &[]);
+        assert!(f.iter().any(|(_, x)| x.id == "BASELINE_NOT_PROBED"));
+        assert!(!f.iter().any(|(_, x)| x.id == "TOOL_ADDED"));
+    }
+
+    #[test]
+    fn only_filter_scopes_removals() {
+        let base: Baseline = serde_json::from_str(
+            r#"{
+                "version":1,
+                "servers":[
+                    {"name":"fs","command":"/bin/fs","args":[],"url":null,"probed":true,"tools":[]},
+                    {"name":"web","command":"/bin/web","args":[],"url":null,"probed":true,"tools":[]}
+                ]
+            }"#,
+        ).unwrap();
+        let s = ServerConfig {
+            name: "fs".into(), source_file: "t".into(), transport: "stdio".into(),
+            command: Some("/bin/fs".into()), args: vec![], env: vec![], url: None,
+        };
+        let r = crate::analyze::finalize(&s, false, None, vec![], vec![]);
+        let (f, removed) = diff(&base, &[r], &["fs".to_string()]);
+        assert!(f.is_empty());
+        assert!(removed.is_empty());
     }
 }
