@@ -116,11 +116,19 @@ fn main() {
                     let (drift, removed) = baseline::diff(&b, &[], &only);
                     let _ = drift;
                     if removed.is_empty() {
-                        if json { println!("[]"); } else { println!("No MCP servers found in known config locations."); }
+                        if json {
+                            println!(r#"{{"servers": [], "baseline_removed_servers": []}}"#);
+                        } else {
+                            println!("No MCP servers found in known config locations.");
+                        }
                         return;
                     }
                     if json {
-                        println!("[]");
+                        let payload = serde_json::json!({
+                            "servers": [],
+                            "baseline_removed_servers": removed,
+                        });
+                        println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
                     } else {
                         println!("No MCP servers found in known config locations.");
                         println!("\n[BASELINE] servers no longer present: {}", removed.join(", "));
@@ -133,7 +141,11 @@ fn main() {
                 }
             }
         }
-        if json { println!("[]"); } else { println!("No MCP servers found in known config locations."); }
+        if json {
+            println!(r#"{{"servers": [], "baseline_removed_servers": []}}"#);
+        } else {
+            println!("No MCP servers found in known config locations.");
+        }
         return;
     }
 
@@ -208,7 +220,7 @@ fn main() {
     }
 
     if json {
-        report::print_json(&results);
+        report::print_json(&results, &removed_servers);
     } else {
         report::print_text(&results, &removed_servers);
     }
@@ -219,6 +231,11 @@ fn main() {
         fail |= results
             .iter()
             .any(|r| r.findings.iter().any(|f| f.severity == model::Severity::Critical));
+        // Silent tool gain is the primary attack the baseline workflow exists
+        // to catch; it must fail the gate even though it grades below F.
+        fail |= results
+            .iter()
+            .any(|r| r.findings.iter().any(|f| f.id == "TOOL_ADDED"));
     }
     if let Some(min) = fail_under {
         fail |= results.iter().any(|r| r.score < min);

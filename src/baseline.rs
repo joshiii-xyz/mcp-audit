@@ -43,7 +43,15 @@ pub fn save(path: &str, results: &[AuditResult]) -> Result<(), String> {
 pub fn load(path: &str) -> Result<Baseline, String> {
     let text = std::fs::read_to_string(Path::new(path))
         .map_err(|e| format!("cannot read {}: {e}", path))?;
-    serde_json::from_str(&text).map_err(|e| format!("{} is not a valid baseline: {e}", path))
+    let base: Baseline =
+        serde_json::from_str(&text).map_err(|e| format!("{} is not a valid baseline: {e}", path))?;
+    if base.version != 1 {
+        return Err(format!(
+            "{}: unsupported baseline format version {} (expected 1) — re-save the baseline",
+            path, base.version
+        ));
+    }
+    Ok(base)
 }
 
 fn fingerprint(s: &ServerConfig) -> String {
@@ -245,5 +253,18 @@ mod unprobed_tests {
         let (f, removed) = diff(&base, &[r], &["fs".to_string()]);
         assert!(f.is_empty());
         assert!(removed.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+    #[test]
+    fn future_baseline_version_rejected() {
+        let dir = std::env::temp_dir().join("mcpaudit-ver-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let p = dir.join("b.json");
+        std::fs::write(&p, r#"{"version": 99, "servers": []}"#).unwrap();
+        assert!(load(p.to_str().unwrap()).is_err());
     }
 }

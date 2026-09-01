@@ -131,7 +131,11 @@ pub fn print_text(results: &[AuditResult], removed: &[String]) {
     );
 }
 
-pub fn print_json(results: &[AuditResult]) {
+pub fn print_json(results: &[AuditResult], removed: &[String]) {
     let safe = display(results);
-    println!("{}", serde_json::to_string_pretty(&safe).unwrap_or_default());
+    let payload = serde_json::json!({
+        "servers": safe,
+        "baseline_removed_servers": removed,
+    });
+    println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
 }

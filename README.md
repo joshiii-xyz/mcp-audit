@@ -67,10 +67,18 @@ mcp-audit --probe --baseline .mcp-audit-baseline.json --strict
 ```
 
 Drift findings:
+- **HIGH** — a tool appeared that didn't exist before (**fails `--strict`**)
+- **MEDIUM** — a brand-new server appeared
+- **CRITICAL** — server command/URL changed since baseline (**fails `--strict`**)
 - **CRITICAL** — server command/URL changed since baseline (config tampering)
-- **HIGH** — a tool appeared that didn't exist before
+- **HIGH** — a tool appeared that didn't exist before (fails `--strict`)
+- **MEDIUM** — a brand-new server appeared
 - **LOW** — a tool disappeared
-- **MEDIUM** — a brand-new server appeared; baselined servers that vanish also fail the run
+- Baselined servers that vanish also fail the run, with or without `--strict`
+
+JSON output (`--json`) is an object: `{"servers": [...], "baseline_removed_servers": [...]}`.
+
+Known limitations (by design): the trust score is a simple additive penalty model, not a calibrated probability; baselines match servers by name, so same-name servers with different configs across files may pair unexpectedly; `--probe` will execute configs flagged below CRITICAL (including unpinned-registry servers); a bare `"servers"` JSON key is only honored at the document root to avoid auditing unrelated config files.
 
 Commit `.mcp-audit-baseline.json` to your repo or dotfiles to share the baseline.
 

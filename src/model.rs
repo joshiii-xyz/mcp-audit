@@ -70,12 +70,16 @@ const SECRET_HINTS: &[&str] = &[
 
 fn is_secretish(value: &str) -> bool {
     let v = value.trim();
-    if v.len() < 20 || v.contains(char::is_whitespace) || v.starts_with('/') {
+    if v.contains(char::is_whitespace) || v.starts_with('/') {
         return false;
     }
-    let known = ["sk-", "ghp_", "gho_", "github_pat_", "AKIA", "xoxb-", "xoxp-", "Bearer ", "eyJ"];
+    // Known credential prefixes match at any length.
+    let known = ["sk-", "ghp_", "gho_", "github_pat_", "AKIA", "xoxb-", "xoxp-", "eyJ"];
     if known.iter().any(|p| v.starts_with(p)) {
         return true;
+    }
+    if v.len() < 20 {
+        return false;
     }
     v.chars().all(|c| c.is_ascii_alphanumeric() || "-_.=~+".contains(c)) && v.chars().any(|c| c.is_ascii_digit())
 }

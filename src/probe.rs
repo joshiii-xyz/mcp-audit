@@ -15,7 +15,7 @@ const MAX_LINES: usize = 4096;
 
 /// Read one line, bounded: lines longer than MAX_LINE are truncated (the
 /// remainder is discarded up to the newline).
-fn read_line_capped<R: BufRead>(r: &mut R) -> std::io::Result<Option<String>> {
+fn read_line_capped<R: BufRead>(r: &mut R) -> std::io::Result<Option<(String, bool)>> {
     let mut buf = Vec::new();
     let mut skipping = false;
     loop {
@@ -47,13 +47,13 @@ fn read_line_capped<R: BufRead>(r: &mut R) -> std::io::Result<Option<String>> {
             }
         }
         if found_nl {
-            return Ok(Some(String::from_utf8_lossy(&buf).into_owned()));
+            return Ok(Some((String::from_utf8_lossy(&buf).into_owned(), skipping)));
         }
         if consumed == 0 {
             return if buf.is_empty() {
                 Ok(None)
             } else {
-                Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+                Ok(Some((String::from_utf8_lossy(&buf).into_owned(), skipping)))
             };
         }
     }
@@ -103,6 +103,8 @@ fn run_probe(s: &ServerConfig, timeout: Duration) -> ProbeOutcome {
         let mut tools = Vec::new();
         let mut error: Option<String> = None;
         let mut saw_handshake = false;
+        let mut got_tools_response = false;
+        let mut truncated_lines = 0usize;
         if let Some(stdout) = stdout {
             let mut reader = BufReader::new(stdout);
             let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"mcp-audit","version":"0.1.0"}}}"#;
@@ -114,12 +116,17 @@ fn run_probe(s: &ServerConfig, timeout: Duration) -> ProbeOutcome {
             }
             let _ = stdin.flush();
 
+            let mut lines_read = 0usize;
             'outer: for _ in 0..MAX_LINES {
-                let line = match read_line_capped(&mut reader) {
+                lines_read += 1;
+                let (line, truncated) = match read_line_capped(&mut reader) {
                     Ok(Some(l)) => l,
                     Ok(None) => break, // EOF
                     Err(_) => break,
                 };
+                if truncated {
+                    truncated_lines += 1;
+                }
                 if line.trim().is_empty() {
                     continue;
                 }
@@ -127,7 +134,9 @@ fn run_probe(s: &ServerConfig, timeout: Duration) -> ProbeOutcome {
                     Ok(v) => v,
                     Err(_) => continue, // tolerate non-JSON noise
                 };
-                let id = v.get("id").and_then(|i| i.as_u64());
+                let id = v.get("id").and_then(|i| {
+                    i.as_u64().or_else(|| i.as_str().and_then(|x| x.parse::<u64>().ok()))
+                });
                 match id {
                     Some(1) => {
                         saw_handshake = true;
@@ -139,6 +148,7 @@ fn run_probe(s: &ServerConfig, timeout: Duration) -> ProbeOutcome {
                         let _ = stdin.flush();
                     }
                     Some(2) => {
+                        got_tools_response = true;
                         if let Some(err_obj) = v.get("error") {
                             error = Some(format!(
                                 "server returned JSON-RPC error to tools/list: {err_obj}"
@@ -156,9 +166,17 @@ fn run_probe(s: &ServerConfig, timeout: Duration) -> ProbeOutcome {
                     _ => continue,
                 }
             }
-            if error.is_none() && saw_handshake {
+            if error.is_none() && got_tools_response && truncated_lines > 0 {
+                error = Some(format!(
+                    "tools/list response contained {truncated_lines} line(s) over the 1 MiB per-line limit; output was truncated and may be incomplete"
+                ));
+            } else if error.is_none() && saw_handshake && !got_tools_response {
                 // we asked for tools/list but never saw id=2
                 error = Some("server closed output before answering tools/list".into());
+            } else if error.is_none() && !saw_handshake && lines_read >= MAX_LINES {
+                error = Some(format!(
+                    "server emitted more than {MAX_LINES} output lines without completing the MCP handshake"
+                ));
             } else if error.is_none() && !saw_handshake {
                 error = Some("server never responded to MCP initialize handshake".into());
             }

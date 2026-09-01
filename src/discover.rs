@@ -27,22 +27,27 @@ pub fn candidate_files() -> Vec<String> {
 /// `mcpServers` or `servers` key (handles both camelCase clients like Claude
 /// Desktop/Cursor/Windsurf and snake_case/VS Code styles, at any nesting
 /// depth — e.g. Claude Code's `projects.<path>.mcpServers`).
-fn walk(value: &serde_json::Value, path: &str, warnings: &mut Vec<String>, out: &mut Vec<ServerConfig>) {
+fn walk(value: &serde_json::Value, path: &str, warnings: &mut Vec<String>, out: &mut Vec<ServerConfig>, depth: usize) {
     match value {
         serde_json::Value::Object(map) => {
             for (k, v) in map {
-                if matches!(k.as_str(), "mcpServers" | "mcp_servers" | "servers") && v.is_object() {
+                // "mcpServers"/"mcp_servers" are unambiguous at any depth; a
+                // bare "servers" key is only trusted at the document root to
+                // avoid auditing unrelated "servers" blocks in generic JSON.
+                let is_server_key = matches!(k.as_str(), "mcpServers" | "mcp_servers")
+                    || (k == "servers" && depth == 0);
+                if is_server_key && v.is_object() {
                     for (name, entry) in v.as_object().unwrap() {
                         parse_entry(name, entry, path, warnings, out);
                     }
                 } else {
-                    walk(v, path, warnings, out);
+                    walk(v, path, warnings, out, depth + 1);
                 }
             }
         }
         serde_json::Value::Array(items) => {
             for it in items {
-                walk(it, path, warnings, out);
+                walk(it, path, warnings, out, depth);
             }
         }
         _ => {}
@@ -162,7 +167,7 @@ pub fn discover(extra_paths: &[String]) -> Result<(Vec<ServerConfig>, Vec<String
             }
         };
         let before = servers.len();
-        walk(&value, &p, &mut warnings, &mut servers);
+        walk(&value, &p, &mut warnings, &mut servers, 0);
         if servers.len() == before {
             warnings.push(format!("{p}: parsed but contains no MCP server entries"));
         }
@@ -194,7 +199,7 @@ mod tests {
         ).unwrap();
         let mut out = Vec::new();
         let mut warn = Vec::new();
-        walk(&doc, "test", &mut warn, &mut out);
+        walk(&doc, "test", &mut warn, &mut out, 0);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].name, "fs");
     }
@@ -206,7 +211,7 @@ mod tests {
         ).unwrap();
         let mut out = Vec::new();
         let mut warn = Vec::new();
-        walk(&doc, "test", &mut warn, &mut out);
+        walk(&doc, "test", &mut warn, &mut out, 0);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].name, "nested");
     }
@@ -223,7 +228,7 @@ mod tests {
         ).unwrap();
         let mut out = Vec::new();
         let mut warn = Vec::new();
-        walk(&doc, "test", &mut warn, &mut out);
+        walk(&doc, "test", &mut warn, &mut out, 0);
         assert_eq!(out.len(), 2, "good + badenv survive; notobj/nothing skipped");
         assert!(!warn.is_empty());
     }
