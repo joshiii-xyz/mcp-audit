@@ -1,10 +1,6 @@
 # mcp-audit
 
-**Scan and rate the trustworthiness of MCP (Model Context Protocol) servers configured on your machine.**
-
-Every AI coding assistant (Claude Code, Claude Desktop, Cursor, Windsurf, VS Code, Gemini CLI...) now runs third-party MCP servers as local processes or network endpoints — often with your credentials in scope and the model auto-granting them tool access. Almost nobody audits what those servers actually are.
-
-`mcp-audit` is a single fast binary that does it for you.
+`mcp-audit` inspects MCP server configuration files on your machine. Static checks read command lines and environment references without starting servers. The optional `--probe` mode starts stdio servers and inspects their handshake and tool definitions.
 
 ## What it checks
 
