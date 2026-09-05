@@ -70,9 +70,6 @@ Drift findings:
 - **HIGH** — a tool appeared that didn't exist before (**fails `--strict`**)
 - **MEDIUM** — a brand-new server appeared
 - **CRITICAL** — server command/URL changed since baseline (**fails `--strict`**)
-- **CRITICAL** — server command/URL changed since baseline (config tampering)
-- **HIGH** — a tool appeared that didn't exist before (fails `--strict`)
-- **MEDIUM** — a brand-new server appeared
 - **LOW** — a tool disappeared
 - Baselined servers that vanish also fail the run, with or without `--strict`
 
